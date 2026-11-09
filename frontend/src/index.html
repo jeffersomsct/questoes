@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Banco de Questões</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<style type="text/tailwindcss">.in{@apply border rounded px-2 py-1.5 text-sm bg-white w-full}.bt{@apply px-3 py-1.5 rounded bg-indigo-600 text-white text-sm hover:bg-indigo-700}</style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+<nav class="bg-slate-900 text-white px-4 py-3 flex flex-wrap gap-2 items-center">
+  <b class="mr-4">📚 Banco de Questões</b>
+  <button class="bt" onclick="tab('est')">Estudar</button><button class="bt" onclick="tab('prova')">Prova</button>
+  <button class="bt" onclick="tab('cad')">Cadastrar</button><button class="bt" onclick="tab('des')">Desempenho</button>
+</nav>
+<main class="max-w-4xl mx-auto p-4 space-y-4">
+  <div id="filtros" class="bg-white rounded-lg shadow p-4 grid grid-cols-2 md:grid-cols-4 gap-2">
+    <select id="f_disc" class="in"></select><select id="f_ass" class="in"></select>
+    <select id="f_banca" class="in"></select><select id="f_conc" class="in"></select>
+    <select id="f_cargo" class="in"></select><select id="f_ano" class="in"></select>
+    <select id="f_ord" class="in"><option value="aleatoria">Ordem: aleatória</option><option value="erradas">Mais errei</option>
+      <option value="demoradas">Mais demoradas</option><option value="menos">Menos respondidas</option><option value="recentes">Mais recentes</option></select>
+    <div class="flex gap-2"><button class="bt flex-1" onclick="buscar()">Estudar</button>
+      <input id="n" type="number" value="20" min="1" class="in !w-16" title="Nº de questões da prova">
+      <button class="bt !bg-emerald-600" onclick="gerar()">Prova</button></div>
+  </div>
+
+  <section id="t-est"><div id="est"><p class="text-center text-slate-500 p-8">Escolha os filtros e clique em <b>Estudar</b>.</p></div></section>
+  <section id="t-prova" class="hidden"><div id="prova"><p class="text-center text-slate-500 p-8">Escolha os filtros e clique em <b>Prova</b> para gerar um caderno misto. O gabarito só aparece ao finalizar.</p></div></section>
+
+  <section id="t-cad" class="hidden"><div class="bg-white rounded-lg shadow p-5 grid md:grid-cols-3 gap-3">
+    <select id="c_disc" class="in"></select><select id="c_ass" class="in"></select>
+    <input id="c_sub" class="in" placeholder="Subassunto (opcional — criado se não existir)">
+    <input id="c_banca" list="bancas" class="in" placeholder="Banca"><datalist id="bancas"></datalist>
+    <input id="c_conc" class="in" placeholder="Concurso"><input id="c_cargo" class="in" placeholder="Cargo">
+    <input id="c_ano" type="number" class="in" placeholder="Ano">
+    <select id="c_tipo" class="in"><option value="MULTIPLA">Múltipla escolha</option><option value="CERTO_ERRADO">Certo/Errado</option></select>
+    <input id="c_gab" class="in" placeholder="Gabarito (A–E ou C/E)">
+    <textarea id="c_enun" class="in md:col-span-3" rows="4" placeholder="Enunciado"></textarea>
+    <div id="c_alts" class="md:col-span-3 space-y-2"></div>
+    <textarea id="c_com" class="in md:col-span-3" rows="2" placeholder="Comentário / explicação (opcional)"></textarea>
+    <button class="bt md:col-span-3" onclick="salvarQ()">Cadastrar questão</button>
+  </div></section>
+
+  <section id="t-des" class="hidden">
+    <div class="flex gap-2 mb-3">
+      <select id="d_por" class="in !w-auto" onchange="desempenho()"><option value="disciplina">Por disciplina</option><option value="area">Por área</option>
+        <option value="assunto">Por assunto</option><option value="banca">Por banca</option><option value="ano">Por ano</option><option value="dia">Evolução diária</option></select>
+      <select id="d_tipo" class="in !w-auto" onchange="desempenho()"><option value="bar">Barras (% acerto)</option><option value="line">Linha (% acerto)</option>
+        <option value="pie">Pizza (volume)</option><option value="radar">Radar (% acerto)</option></select>
+    </div>
+    <div id="chart" class="bg-white rounded-lg shadow" style="height:480px"></div>
+  </section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id), fmt=s=>String((s/60|0)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api=async(u,b,m)=>{const r=await fetch('/api'+u,b===undefined?{}:{method:m||'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});if(!r.ok){alert(await r.text());throw 0}return r.json()};
+let M,Q=[],i=0,t0=0,done=false,P=null,clock;
+const fill=(id,a,t)=>$(id).innerHTML=`<option value="">${t}</option>`+a.map(x=>`<option value="${x.id}">${esc(x.nome)}</option>`).join('');
+const assuntos=(id,d,t)=>fill(id,M.assuntos.filter(a=>a.disciplina_id==d).map(a=>({id:a.id,nome:(a.parent_id?'— ':'')+a.nome})),t);
+const filtros=()=>Object.fromEntries([['disc','disciplina_id'],['ass','assunto_id'],['banca','banca_id'],['conc','concurso_id'],['cargo','cargo_id'],['ano','ano'],['ord','ordem']].map(([a,k])=>[k,$('f_'+a).value]).filter(x=>x[1]));
+
+async function init(){
+  M=await api('/meta');
+  fill('f_disc',M.disciplinas,'Disciplina');fill('f_banca',M.bancas,'Banca');fill('f_conc',M.concursos,'Concurso');fill('f_cargo',M.cargos,'Cargo');fill('f_ano',M.anos,'Ano');
+  fill('c_disc',M.disciplinas,'Disciplina');assuntos('f_ass',0,'Assunto');assuntos('c_ass',0,'Assunto');
+  $('f_disc').onchange=e=>assuntos('f_ass',e.target.value,'Assunto');$('c_disc').onchange=e=>assuntos('c_ass',e.target.value,'Assunto');
+  $('bancas').innerHTML=M.bancas.map(b=>`<option value="${esc(b.nome)}">`).join('');
+  $('c_alts').innerHTML='ABCDE'.split('').map(l=>`<input id="c_${l}" class="in" placeholder="Alternativa ${l}">`).join('');
+}
+function tab(t){['est','prova','cad','des'].forEach(x=>$('t-'+x).classList.toggle('hidden',x!=t));
+  $('filtros').classList.toggle('hidden',!['est','prova'].includes(t));if(t=='des')desempenho()}
+
+/* ---------- Modo padrão: resposta imediata + anotação ---------- */
+async function buscar(){Q=await api('/questoes?'+new URLSearchParams(filtros()));i=0;tab('est');show()}
+function nav(d){i=(i+d+Q.length)%Q.length;show()}
+function show(){
+  const q=Q[i];if(!q){$('est').innerHTML='<p class="text-center p-8">Nenhuma questão encontrada.</p>';return}
+  done=false;t0=performance.now();
+  $('est').innerHTML=`<div class="bg-white rounded-lg shadow p-5 space-y-3">
+   <div class="text-xs text-slate-500 flex justify-between gap-2"><span>${i+1}/${Q.length} · ${esc(q.disciplina)} › ${esc(q.assunto)}</span><span>${esc([q.banca,q.concurso,q.cargo,q.ano].filter(x=>x).join(' · '))}</span></div>
+   <div class="text-xs text-slate-500">Respondida ${q.vezes}x · erros ${q.erros} · tempo médio ${q.tempo??'–'}s</div>
+   ${q.anotacao?`<div class="bg-amber-50 border-l-4 border-amber-400 p-3 text-sm whitespace-pre-wrap">📝 ${esc(q.anotacao)}</div>`:''}
+   <p class="whitespace-pre-wrap">${esc(q.enunciado)}</p>
+   <div class="space-y-2">${q.alternativas.map(a=>`<button id="a_${a.letra}" onclick="resp('${a.letra}')" class="w-full text-left border rounded p-3 hover:bg-slate-50"><b>${a.letra})</b> ${esc(a.texto)}</button>`).join('')}</div>
+   <div id="res"></div>
+   <textarea id="nota" class="in" rows="2" placeholder="Anotação (aparecerá nas próximas vezes que esta questão cair)">${esc(q.anotacao||'')}</textarea>
+   <div class="flex gap-2"><button class="bt" onclick="nota()">Salvar anotação</button><button class="bt !bg-slate-600" onclick="nav(-1)">← Anterior</button><button class="bt !bg-slate-600" onclick="nav(1)">Próxima →</button></div></div>`}
+async function resp(l){
+  if(done)return;done=true;const q=Q[i],t=Math.round((performance.now()-t0)/1000);
+  const r=await api('/responder',{questao_id:q.id,resposta:l,tempo:t});
+  $('a_'+r.gabarito)?.classList.add('!bg-green-100','!border-green-500');if(!r.acertou)$('a_'+l).classList.add('!bg-red-100','!border-red-500');
+  $('res').innerHTML=`<div class="text-sm"><b>${r.acertou?'✅ Acertou':'❌ Errou — gabarito '+r.gabarito}</b> · ${t}s${r.comentario?'<p class="mt-1 whitespace-pre-wrap">'+esc(r.comentario)+'</p>':''}</div>`}
+async function nota(){await api('/anotacao',{questao_id:Q[i].id,texto:$('nota').value},'PUT');Q[i].anotacao=$('nota').value;alert('Anotação salva')}
+
+/* ---------- Modo prova: gabarito só no final ---------- */
+async function gerar(){
+  const r=await api('/simulados',{titulo:'Prova '+new Date().toLocaleString('pt-BR'),n:+$('n').value||20,filtros:filtros()});P=r;tab('prova');
+  if(!r.questoes.length){$('prova').innerHTML='<p class="text-center p-8">Nenhuma questão encontrada.</p>';return}
+  t0=Date.now();clearInterval(clock);clock=setInterval(()=>$('clock')&&($('clock').textContent=fmt((Date.now()-t0)/1000|0)),1000);
+  $('prova').innerHTML=`<div class="sticky top-0 z-10 bg-slate-900 text-white p-3 rounded flex justify-between items-center"><span>${r.questoes.length} questões</span><b id="clock">00:00</b><button class="bt !bg-green-600" onclick="finalizar()">Finalizar</button></div>`+
+   r.questoes.map((q,n)=>`<div class="bg-white rounded-lg shadow p-4 mt-3" id="p_${q.id}"><div class="text-xs text-slate-500">${n+1}. ${esc(q.disciplina)} · ${esc([q.banca,q.ano].filter(x=>x).join(' · '))}</div><p class="whitespace-pre-wrap my-2">${esc(q.enunciado)}</p>`+
+   q.alternativas.map(a=>`<label class="block p-2 rounded hover:bg-slate-50 cursor-pointer"><input type="radio" name="q${q.id}" value="${a.letra}"> <b>${a.letra})</b> ${esc(a.texto)}</label>`).join('')+'</div>').join('')}
+async function finalizar(){
+  clearInterval(clock);const resp={};
+  P.questoes.forEach(q=>{const c=document.querySelector(`input[name=q${q.id}]:checked`);if(c)resp[q.id]=c.value});
+  const r=await api(`/simulados/${P.id}/finalizar`,{respostas:resp,tempo:(Date.now()-t0)/1000|0});
+  r.forEach(x=>$('p_'+x.id).insertAdjacentHTML('beforeend',`<div class="mt-2 text-sm ${x.acertou?'text-green-700':'text-red-700'}"><b>${x.acertou?'✅':'❌'} Sua resposta: ${x.resposta||'em branco'} · Gabarito: ${x.gabarito}</b>${x.comentario?'<p class="text-slate-700 whitespace-pre-wrap">'+esc(x.comentario)+'</p>':''}</div>`));
+  const ok=r.filter(x=>x.acertou).length;
+  $('prova').insertAdjacentHTML('afterbegin',`<div class="bg-green-50 border border-green-400 rounded p-4 text-lg font-bold mb-3">Resultado: ${ok}/${r.length} (${Math.round(100*ok/r.length)}%)</div>`);scrollTo(0,0)}
+
+/* ---------- Cadastro ---------- */
+async function salvarQ(){
+  if(!$('c_ass').value)return alert('Escolha disciplina e assunto');
+  const v=id=>$(id).value.trim()||null,alts={};'ABCDE'.split('').forEach(l=>{if(v('c_'+l))alts[l]=v('c_'+l)});
+  await api('/questoes',{assunto_id:+$('c_ass').value,subassunto:v('c_sub'),banca:v('c_banca'),concurso:v('c_conc'),cargo:v('c_cargo'),ano:+$('c_ano').value||null,
+    tipo:$('c_tipo').value,enunciado:$('c_enun').value,gabarito:($('c_gab').value.trim()).toUpperCase(),comentario:v('c_com'),alternativas:alts});
+  ['c_enun','c_com','c_gab',...'ABCDE'.split('').map(l=>'c_'+l)].forEach(id=>$(id).value='');
+  M=await api('/meta');fill('f_banca',M.bancas,'Banca');fill('f_conc',M.concursos,'Concurso');fill('f_cargo',M.cargos,'Cargo');fill('f_ano',M.anos,'Ano');
+  $('bancas').innerHTML=M.bancas.map(b=>`<option value="${esc(b.nome)}">`).join('');alert('Questão cadastrada ✔')}
+
+/* ---------- Gráficos (ECharts) ---------- */
+async function desempenho(){
+  const por=$('d_por').value,tipo=$('d_tipo').value,d=await api('/stats?por='+por),n=d.map(x=>x.nome),cor=p=>p>=70?'#16a34a':p>=50?'#f59e0b':'#dc2626';
+  $('chart').style.height=(tipo=='bar'?Math.max(420,n.length*30+80):480)+'px';
+  const c=echarts.getInstanceByDom($('chart'))||echarts.init($('chart'));c.clear();c.resize();
+  const o={title:{text:tipo=='pie'?'Questões respondidas por '+por:'Aproveitamento (%) por '+por,left:'center'},tooltip:{trigger:tipo=='pie'||tipo=='radar'?'item':'axis'}};
+  if(!d.length)o.title.text='Ainda não há respostas registradas';
+  else if(tipo=='pie')o.series=[{type:'pie',radius:['35%','65%'],data:d.map(x=>({name:x.nome,value:x.respostas}))}];
+  else if(tipo=='radar'){o.radar={indicator:n.map(x=>({name:x,max:100}))};o.series=[{type:'radar',areaStyle:{},data:[{value:d.map(x=>x.pct),name:'% acerto'}]}]}
+  else if(tipo=='line'){o.xAxis={type:'category',data:n};o.yAxis={type:'value',max:100};o.series=[{type:'line',smooth:true,data:d.map(x=>x.pct)}]}
+  else{o.grid={left:200,right:50,top:50,bottom:20};o.xAxis={type:'value',max:100};o.yAxis={type:'category',data:n,inverse:true};
+    o.series=[{type:'bar',label:{show:true,position:'right',formatter:'{c}%'},data:d.map(x=>({value:x.pct,itemStyle:{color:cor(x.pct)}}))}]}
+  c.setOption(o)}
+init();
+</script>
+</body></html>
